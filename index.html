@@ -24,7 +24,8 @@
     <div><b>Upload CSV</b></div>
     <input type="file" id="csvFile" accept=".csv"/>
     <div class="muted" style="margin-top:6px">Expected headers (exact):<br>
-      <span class="mono">PRECINCT_ID, ED, Zone, Committee Members, Candidate A (Total), Candidate B (Total), Candidate C (Total), Candidate D (Total), Total Votes, Opposition Vote Count(A+B), Opposition Percentage (A+B), Republican Vote Count (C+D), Republican  Percentage (C+D), Percentage Difference (Margin Republican -Opposition)</span>
+      <span class="mono">PRECINCT_ID, ED, Zone, Committee Members, Candidate A (Total), Candidate B (Total), Candidate C (Total), Candidate D (Total), Total Votes, Opposition Vote Count(A+B), Opposition Percentage (A+B), Republican Vote Count (C+D), Republican  Percentage (C+D), Percentage Difference (Margin Republican -Opposition)</span><br>
+      Optional: <span class="mono">Monitor</span> (put <b>X</b> to highlight).
     </div>
     <div id="status" class="muted" style="margin-top:6px"></div>
   </div>
@@ -46,7 +47,9 @@
     // ---- Map setup ----
     const map = L.map('map').setView([40.85, -73.4], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
-    let geojsonLayer; const labels = L.layerGroup().addTo(map);
+    let geojsonLayer;
+    const labels = L.layerGroup().addTo(map);         // ED number labels
+    const highlightLayer = L.layerGroup().addTo(map); // red rings for "Monitor = X"
     const statusEl = document.getElementById('status');
 
     // ---- Column names (exact) ----
@@ -99,6 +102,13 @@
       if(missing.length) throw new Error('Missing columns: ' + missing.join(', '));
     }
 
+    // Monitor flag: true only if CSV has Monitor = "X" (case-insensitive)
+    function isMonitored(props) {
+      const raw = props.Monitor ?? props.MONITOR ?? props.monitor;
+      if (raw == null) return false;
+      return String(raw).trim().toUpperCase() === 'X';
+    }
+
     function drawPopup(p){
       const title = p.NAME ?? `ED ${p.ED_Number ?? p[COLS.ed] ?? ''}`;
       const cm = nl2br(p[COLS.members] ?? '');
@@ -111,7 +121,7 @@
       let html = `<div style="min-width:260px">`;
       html += `<div><b>Election District:</b> ${title}</div>`;
       if(p[COLS.zone]) html += `<div><b>Zone:</b> ${p[COLS.zone]}</div>`;
-      html += `<hr><div><b>Committee Members</b><br>${cm||'—'}</div><hr>`;
+      if(cm) html += `<hr><div><b>Committee Members</b><br>${cm}</div><hr>`;
 
       html += `<div><b>Totals</b></div>
       <table class="tbl">
@@ -137,6 +147,7 @@
     function applyData(geo, csvRows){
       if(geojsonLayer) map.removeLayer(geojsonLayer);
       labels.clearLayers();
+      highlightLayer.clearLayers();
 
       // Build lookup by PRECINCT_ID
       const byId = new Map();
@@ -167,17 +178,30 @@
             weight: 1,
             fillOpacity: 1
           };
-        },  // <-- the comma that was missing
+        },
         onEachFeature: (feature, layer) => {
           layer.bindPopup(drawPopup(feature.properties));
           try{
             const c = turf.centroid(feature).geometry.coordinates;
             const txt = feature.properties.ED_Number ?? feature.properties[COLS.ed] ?? '';
+
+            // ED number label (always)
             const lbl = L.marker([c[1], c[0]], {
               icon: L.divIcon({ className:'ed-label', html:`<div>${txt}</div>`, iconSize:[40,20], iconAnchor:[20,10]}),
               interactive:false
             });
             labels.addLayer(lbl);
+
+            // Red ring ONLY when Monitor = "X"
+            if (isMonitored(feature.properties)) {
+              const ring = L.circleMarker([c[1], c[0]], {
+                radius: 14,
+                color: '#e02424',
+                weight: 3,
+                fillOpacity: 0
+              });
+              highlightLayer.addLayer(ring);
+            }
           }catch(_){}
         }
       }).addTo(map);
