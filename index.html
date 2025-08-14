@@ -69,10 +69,10 @@
     const REQUIRED = Object.values(COLS);
 
     // ---- Helpers ----
-    const getColor = (x)=> chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1,0,1])(x).hex();
     const toNum = v => { const n = Number(String(v??'').replace(/[, ]/g,'')); return Number.isFinite(n)?n:0; };
     const fmtInt = v => isNaN(v)||v==null ? '—' : `${Math.round(v)}`;
     const nl2br = s => String(s??'').replace(/\r?\n/g,'<br>');
+    const getColor = (x)=> chroma.scale(['#000080', '#ffffff', '#800000']).mode('lab').domain([-1,0,1])(x).hex();
 
     // Parse "33.12%" or "33.12" or 0.3312 -> 33.12
     function toPctNumber(v) {
@@ -87,7 +87,6 @@
       if (!Number.isFinite(n)) return null;
       return (n >= 0 && n <= 1) ? n * 100 : n;
     }
-    // Display as percentage (use CSV text if already has %)
     function fmtPctSmart(v) {
       if (v == null) return '—';
       const s = String(v).trim();
@@ -95,7 +94,6 @@
       const n = toPctNumber(v);
       return (n == null) ? '—' : `${n.toFixed(1)}%`;
     }
-
     function validateHeaders(headers){
       const missing = REQUIRED.filter(h=>!headers.includes(h));
       if(missing.length) throw new Error('Missing columns: ' + missing.join(', '));
@@ -159,19 +157,17 @@
       // Draw
       geojsonLayer = L.geoJSON(geo, {
         style: function (feature) {
-  const margin = feature.properties.percent_difference;
-  const norm = isNaN(margin) ? 0 : margin / 100;
-  return {
-    fillColor: chroma
-      .scale(['#000080', '#ffffff', '#800000']) // deeper navy to deep maroon
-      .mode('lab') // smoother transitions
-      .domain([-1, 0, 1])(norm)
-      .hex(),
-    color: "#222", // darker border
-    weight: 1,
-    fillOpacity: 1 // fully opaque
-  };
-}
+          // Prefer numeric percent_difference if present; else try CSV margin text
+          const mRaw = feature.properties.percent_difference ?? feature.properties[COLS.margin];
+          const m = (typeof mRaw === 'number') ? mRaw : toPctNumber(mRaw);
+          const norm = (m == null) ? 0 : (m / 100);
+          return {
+            fillColor: getColor(norm),
+            color: "#222",
+            weight: 1,
+            fillOpacity: 1
+          };
+        },  // <-- the comma that was missing
         onEachFeature: (feature, layer) => {
           layer.bindPopup(drawPopup(feature.properties));
           try{
