@@ -69,7 +69,7 @@
     const REQUIRED = Object.values(COLS);
 
     // ---- Helpers ----
-    const getColor = (x)=> chroma.scale(['#001f3f','white','#8B0000']).domain([-1,0,1])(x).hex();
+    const getColor = (x)=> chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1,0,1])(x).hex();
     const toNum = v => { const n = Number(String(v??'').replace(/[, ]/g,'')); return Number.isFinite(n)?n:0; };
     const fmtInt = v => isNaN(v)||v==null ? '—' : `${Math.round(v)}`;
     const nl2br = s => String(s??'').replace(/\r?\n/g,'<br>');
@@ -158,11 +158,20 @@
 
       // Draw
       geojsonLayer = L.geoJSON(geo, {
-        style: feat => {
-          const m = toPctNumber(feat.properties[COLS.margin]); // may be "33.12%" or 33.12
-          const norm = (m == null) ? 0 : (m/100);
-          return { fillColor:getColor(norm), color:'#333', weight:1, fillOpacity:.99 };
-        },
+        style: function (feature) {
+  const margin = feature.properties.percent_difference;
+  const norm = isNaN(margin) ? 0 : margin / 100;
+  return {
+    fillColor: chroma
+      .scale(['#000080', '#ffffff', '#800000']) // deeper navy to deep maroon
+      .mode('lab') // smoother transitions
+      .domain([-1, 0, 1])(norm)
+      .hex(),
+    color: "#222", // darker border
+    weight: 1,
+    fillOpacity: 1 // fully opaque
+  };
+}
         onEachFeature: (feature, layer) => {
           layer.bindPopup(drawPopup(feature.properties));
           try{
