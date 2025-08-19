@@ -85,6 +85,11 @@
       let html = `<div style="min-width:260px">`;
       html += `<div><strong>Election District:</strong> ${name}</div>`;
 
+      const members = props['Committee Members'];
+      if (members && String(members).trim() !== '') {
+        html += `<hr><div><strong>Committee Members</strong><br><div style="border:2px solid black;background:#ddd;padding:8px 4px;margin:6px 0;font-family:monospace;white-space:pre-wrap;">${nl2br(members)}</div></div>`;
+      }
+
       html += `<hr><table class="tbl">`;
       for (const key of popupOrder) {
         if (props[key] !== undefined) {
@@ -127,8 +132,8 @@
       geojsonLayer = L.geoJSON(data, {
         style: function (feature) {
           const margin = Number(
-            feature.properties['Percentage Difference (Margin Republican –Opposition)'] ??
             feature.properties['Percent Difference'] ??
+            feature.properties['Percentage Difference (Margin Republican –Opposition)'] ??
             0
           );
           const norm = isNaN(margin) ? 0 : margin / 100;
