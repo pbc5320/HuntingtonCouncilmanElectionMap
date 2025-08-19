@@ -35,6 +35,15 @@
     }
     .tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
     .tbl td { padding: 2px 4px; border-bottom: 1px solid #eee; }
+    #legend {
+      position: absolute;
+      bottom: 10px; left: 10px; z-index: 1000;
+      background: white; padding: 10px 14px;
+      border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.15);
+      font-family: system-ui, sans-serif;
+      font-size: 12px; line-height: 1.4;
+      max-width: 160px;
+    }
   </style>
 </head>
 <body>
@@ -42,7 +51,21 @@
     <label for="csvFile"><b>Upload CSV</b></label><br>
     <input type="file" id="csvFile" accept=".csv" />
   </div>
+
   <div id="map"></div>
+
+  <div id="legend">
+    <strong>Margin Heatmap</strong>
+    <div style="display:flex;align-items:center;margin-top:6px;">
+      <div style="flex:1;height:10px;background:linear-gradient(to right, #001f3f, white, #8B0000);margin-right:6px;border:1px solid #999;"></div>
+      <div style="font-size:11px;">Margin</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;">
+      <span style="color:#001f3f;">Rep+</span>
+      <span style="color:#777;">Even</span>
+      <span style="color:#8B0000;">Opp+</span>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -131,12 +154,12 @@
 
       geojsonLayer = L.geoJSON(data, {
         style: function (feature) {
-          const margin = Number(
-            feature.properties['Percent Difference'] ??
-            feature.properties['Percentage Difference (Margin Republican –Opposition)'] ??
-            0
-          );
-          const norm = isNaN(margin) ? 0 : margin / 100;
+          const raw = feature.properties['Percent Difference'] ??
+                      feature.properties['Percentage Difference (Margin Republican –Opposition)'] ?? 0;
+          const parsed = typeof raw === 'string' && raw.trim().endsWith('%')
+                         ? parseFloat(raw.trim().replace('%', ''))
+                         : Number(raw);
+          const norm = isNaN(parsed) ? 0 : parsed / 100;
           return {
             fillColor: getColor(norm),
             color: "#333",
@@ -151,7 +174,6 @@
           try {
             const center = turf.centroid(feature).geometry.coordinates;
             const edText = p.ED ?? p['ED Number'] ?? '';
-
             const labelClass = isMonitored(p) ? 'ed-label ed-label--highlight' : 'ed-label';
             const iconSize = isMonitored(p) ? [28, 28] : [40, 20];
             const iconAnchor = isMonitored(p) ? [14, 14] : [20, 10];
