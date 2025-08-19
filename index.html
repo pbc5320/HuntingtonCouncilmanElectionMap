@@ -218,30 +218,38 @@
           const mRaw = feature.properties.percent_difference ?? feature.properties[COLS.margin];
           const m = (typeof mRaw === 'number') ? mRaw : toPctNumber(mRaw);
           const norm = (m == null) ? 0 : (m / 100);
-          return { fillColor: getColor(norm), color: "#222", weight: 1, fillOpacity: 1 };
+          return {
+  fillColor: getColor(norm),
+  color: "#222",
+  weight: 1,
+  fillOpacity: isMonitored(feature.properties) ? 1 : 0.2 // dim unmonitored
+};
         },
-        onEachFeature: (feature, layer) => {
-          const p = feature.properties;
-          layer.bindPopup(drawPopup(p));
-          try{
-            const c = turf.centroid(feature).geometry.coordinates;
-            const txt = p.ED_Number ?? p[COLS.ed] ?? '';
-            const monitored = isMonitored(p);
-            if (monitored) highlighted++;
+    onEachFeature: (feature, layer) => {
+  const p = feature.properties;
+  const monitored = isMonitored(p);
 
-            const label = L.marker([c[1], c[0]], {
-              icon: L.divIcon({
-                className: monitored ? 'ed-label ed-label--monitor' : 'ed-label',
-                html: `<div>${txt}</div>`,
-                iconSize: monitored ? [28, 28] : [40, 20],
-                iconAnchor: monitored ? [14, 14] : [20, 10]
-              }),
-              interactive:false
-            });
-            labels.addLayer(label);
-          }catch(_){}
-        }
-      }).addTo(map);
+  if (monitored) {
+    layer.bindPopup(drawPopup(p));
+    highlighted++;
+
+    try {
+      const c = turf.centroid(feature).geometry.coordinates;
+      const txt = p.ED_Number ?? p[COLS.ed] ?? '';
+
+      const label = L.marker([c[1], c[0]], {
+        icon: L.divIcon({
+          className: 'ed-label ed-label--monitor',
+          html: `<div>${txt}</div>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        }),
+        interactive: false
+      });
+      labels.addLayer(label);
+    } catch (_) {}
+  }
+}).addTo(map);
 
       // Status/debug line so you can verify monitoring is being detected
       statusEl.textContent = `CSV rows: ${csvRowsCount || 0} • Features matched: ${matched} • Monitored (X): ${highlighted}`;
