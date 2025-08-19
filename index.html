@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Huntington Election District Map</title>
+  <title>Huntington Councilman Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -58,6 +58,13 @@
     let geojsonLayer;
     const labelLayer = L.layerGroup().addTo(map);
 
+    const popupOrder = [
+      'AD', 'SD', 'TD', 'CD', 'LD',
+      'GOP Candidate Votes', 'Opposition Candidate Vote',
+      'GOP Candidate Percent', 'Opposition Candidate Percent',
+      'Percent Difference', 'Total Votes'
+    ];
+
     function getColor(value) {
       return chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1, 0, 1])(value).hex();
     }
@@ -73,30 +80,18 @@
       return `${n.toFixed(1)}%`;
     }
 
-    const fieldsToExclude = new Set([
-      'OBJECTID', 'COUNTY', 'LASTUPDATE', 'POLLINGID', 'Shape_Length', 'Shape_Area',
-      'Committee Members', 'Highlight'
-    ]);
-
     function drawPopup(props) {
       const name = props.ED ?? props['ED Number'] ?? props.NAME ?? '';
       let html = `<div style="min-width:260px">`;
       html += `<div><strong>Election District:</strong> ${name}</div>`;
-      if (props.Zone && String(props.Zone).trim() !== '') {
-        html += `<div><strong>Zone:</strong> ${props.Zone}</div>`;
-      }
-      const members = props['Committee Members'];
-      if (members && String(members).trim() !== '') {
-        html += `<hr><div><strong>Committee Members</strong><br>${nl2br(members)}</div>`;
-      }
+
       html += `<hr><table class="tbl">`;
-      const entries = Object.entries(props).sort(([a],[b]) => a.localeCompare(b));
-      for (const [key, value] of entries) {
-        if (fieldsToExclude.has(key)) continue;
-        if (['NAME','ED','ED Number','Zone'].includes(key)) continue;
-        let val = value ?? 'N/A';
-        if (key.toLowerCase().includes('percent')) val = fmtPctSmart(value);
-        html += `<tr><td><b>${key}</b></td><td style="text-align:right">${val}</td></tr>`;
+      for (const key of popupOrder) {
+        if (props[key] !== undefined) {
+          let val = props[key];
+          if (key.toLowerCase().includes('percent')) val = fmtPctSmart(val);
+          html += `<tr><td><b>${key}</b></td><td style="text-align:right">${val ?? '—'}</td></tr>`;
+        }
       }
       html += `</table></div>`;
       return html;
@@ -104,8 +99,7 @@
 
     function isMonitored(props) {
       const raw = props.Highlight ?? props.HIGHLIGHT ?? props.highlight ?? props.Monitor;
-      if (raw == null) return false;
-      return String(raw).trim().toUpperCase() === 'X';
+      return String(raw ?? '').trim().toUpperCase() === 'X';
     }
 
     function loadGeoJSON(data, csvData = null) {
@@ -134,7 +128,7 @@
         style: function (feature) {
           const margin = Number(
             feature.properties['Percentage Difference (Margin Republican –Opposition)'] ??
-            feature.properties['Percentage Difference'] ??
+            feature.properties['Percent Difference'] ??
             0
           );
           const norm = isNaN(margin) ? 0 : margin / 100;
@@ -167,17 +161,15 @@
               interactive: false
             });
             labelLayer.addLayer(label);
-          } catch (e) { }
+          } catch (e) {}
         }
       }).addTo(map);
     }
 
-    // initial load
     fetch("Election_District.geojson")
       .then(res => res.json())
       .then(data => loadGeoJSON(data));
 
-    // CSV upload
     document.getElementById("csvFile").addEventListener("change", function (e) {
       const file = e.target.files[0];
       if (!file) return;
