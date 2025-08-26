@@ -8,37 +8,21 @@
   <style>
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { width:100%; height:100vh; }
-    #ui {
-      position:absolute; top:10px; left:10px; z-index:1000;
-      background:#fff; padding:10px; border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.15); max-width:400px;
-    }
+    #ui { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); max-width:420px; }
     .muted { color:#555; font-size:12px; }
-    .legend {
-      position:absolute; bottom:12px; left:10px; z-index:1000;
-      background:#fff; padding:8px 10px; border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:12px;
-    }
-    .legend .scale {
-      height:10px; width:220px;
-      background:linear-gradient(90deg,#00039b,white,#ff2400);
-      border-radius:4px; margin:6px 0;
-    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .legend { position:absolute; bottom:12px; left:10px; z-index:1000; background:#fff; padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:12px; }
+    .legend .scale { height:10px; width:220px; background:linear-gradient(90deg,#000080,white,#800000); border-radius:4px; margin:6px 0; }
     .legend .ticks { display:flex; justify-content:space-between; }
-
     .ed-label {
-      font-size:12px; font-weight:600; color:#000;
-      background: rgba(255,255,255,0.9);
-      border-radius:6px; padding:2px 6px;
-      text-shadow:0 0 3px #fff;
-      box-shadow:0 0 0 1px rgba(0,0,0,.2);
+      font-size:12px; font-weight:600; color:#000; white-space:nowrap; text-shadow:0 0 3px #fff;
+      background: rgba(255,255,255,0.9); border-radius:6px; padding:2px 6px; box-shadow:0 0 0 1px rgba(0,0,0,.2);
     }
-    .ed-label--highlight {
+    .ed-label--monitor {
       background:#fff; border:3px solid #e02424; border-radius:50%;
-      width:28px; height:28px; display:flex;
-      align-items:center; justify-content:center;
-      padding:0; font-weight:800; font-size:12px;
-      box-shadow:0 0 6px rgba(0,0,0,0.45);
+      width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+      padding:0; box-shadow:0 0 6px rgba(0,0,0,0.45);
+      font-weight:800; font-size:12px; line-height:1;
     }
     .tbl { border-collapse:collapse; width:100%; font-size:12px; }
     .tbl td { padding:2px 4px; border-bottom:1px solid #eee; }
@@ -46,13 +30,17 @@
 </head>
 <body>
   <div id="ui">
-    <b>Upload CSV</b><br>
-    <input type="file" id="csvFile" accept=".csv"/>
-    <div class="muted" style="margin-top:6px" id="status"></div>
+    <div><b>Upload CSV</b></div>
+    <input type="file" id="csvFile" accept=".csv">
+    <div class="muted" style="margin-top:6px">
+      Must include column <span class="mono">Committee Members</span>.<br>
+      Optional: <span class="mono">Highlight</span> (put <b>X</b> to show).
+    </div>
+    <div id="status" class="muted" style="margin-top:6px"></div>
   </div>
 
   <div class="legend">
-    <div><b>Heatmap:</b> Percent Difference (GOP % – Opposition %)</div>
+    <div><b>Fill:</b> Margin (Republican % − Opposition %)</div>
     <div class="scale"></div>
     <div class="ticks"><span>-100%</span><span>0%</span><span>+100%</span></div>
   </div>
@@ -66,134 +54,99 @@
 
   <script>
     const map = L.map('map').setView([40.85, -73.4], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
     let geojsonLayer;
     const labels = L.layerGroup().addTo(map);
     const statusEl = document.getElementById('status');
 
-    const COLS = {
-      key: 'PRECINCT_ID',
-      ed: 'ED',
-      zone: 'Zone',
-      members: 'Committee Members',
-      gop: 'GOP Candidate Votes',
-      opp: 'Opposition Candidate Vote',
-      total: 'Total Votes',
-      gopPct: 'GOP Candidate Percent',
-      oppPct: 'Opposition Candidate Percent',
-      margin: 'Percent Difference'
-    };
-
     const toNum = v => { const n = Number(String(v??'').replace(/[, ]/g,'')); return Number.isFinite(n)?n:0; };
-    const fmtInt = v => isNaN(v)||v==null ? '—' : `${Math.round(v)}`;
-    const nl2br = s => String(s??'').replace(/\r?\n/g,'<br>');
-    const getColor = x => chroma.scale(['#00039b', '#ffffff', '#ff2400']).domain([-1,0,1]).mode('lab')(x).hex();
+    const fmtPct = v => (v != null && !isNaN(v)) ? `${parseFloat(v).toFixed(2)}%` : '—';
 
-    const toPctNumber = v => {
-      if (v == null) return null;
-      const s = String(v).trim().replace('%','');
-      const n = Number(s.replace(/[, ]/g,''));
-      return Number.isFinite(n) ? ((n > 1) ? n : n * 100) : null;
-    };
-    const fmtPctSmart = v => {
-      const n = toPctNumber(v);
-      return (n == null) ? '—' : `${n.toFixed(1)}%`;
-    };
-    const isHighlighted = props => {
-      const val = props['HIGHLIGHT'] ?? props['Highlight'] ?? props['highlight'];
-      return val && String(val).trim().toUpperCase() === 'X';
-    };
+    function isMonitored(p) {
+      const val = String(p['Highlight'] ?? '').trim().toLowerCase();
+      return ['x', '✓', '✔', 'true', '1', 'yes', 'y'].includes(val);
+    }
+
+    function getColor(x) {
+      return chroma.scale(['#000080', '#ffffff', '#800000']).mode('lab').domain([-1, 0, 1])(x).hex();
+    }
 
     function drawPopup(p) {
-      const ed = p[COLS.ed] ?? '';
-      const z = p[COLS.zone] ?? '';
-      const cm = nl2br(p[COLS.members] ?? '');
-      const gop = toNum(p[COLS.gop]), opp = toNum(p[COLS.opp]);
-      const tot = toNum(p[COLS.total]);
-      const gopPct = p[COLS.gopPct], oppPct = p[COLS.oppPct], margin = p[COLS.margin];
-
-      let html = `<div style="min-width:260px">`;
-      html += `<div><b>ED:</b> ${ed}</div>`;
-      if (z) html += `<div><b>Zone:</b> ${z}</div>`;
-      if (cm) html += `<hr><div><b>Committee Members</b><br>${cm}</div>`;
-      html += `<hr><table class="tbl">`;
-      html += `<tr><td><b>GOP Votes</b></td><td style="text-align:right">${fmtInt(gop)}</td></tr>`;
-      html += `<tr><td><b>Opposition Votes</b></td><td style="text-align:right">${fmtInt(opp)}</td></tr>`;
-      html += `<tr><td><b>Total Votes</b></td><td style="text-align:right">${fmtInt(tot)}</td></tr>`;
-      html += `<tr><td>GOP %</td><td style="text-align:right">${fmtPctSmart(gopPct)}</td></tr>`;
-      html += `<tr><td>Opposition %</td><td style="text-align:right">${fmtPctSmart(oppPct)}</td></tr>`;
-      html += `<tr><td><b>Margin</b></td><td style="text-align:right">${fmtPctSmart(margin)}</td></tr>`;
-      html += `</table></div>`;
-      return html;
+      return `
+        <div style="min-width:240px">
+          <div><b>Election District:</b> ${p['ED']}</div>
+          <div><b>Committee Members</b><br>${(p['Committee Members'] || '').replace(/\n/g,'<br>')}</div><hr>
+          <table class="tbl">
+            <tr><td>AD</td><td>${p['AD']}</td></tr>
+            <tr><td>SD</td><td>${p['SD']}</td></tr>
+            <tr><td>CD</td><td>${p['CD']}</td></tr>
+            <tr><td>LD</td><td>${p['LD']}</td></tr>
+            <tr><td><b>GOP Candidate Votes</b></td><td>${p['GOP Candidate Votes']}</td></tr>
+            <tr><td><b>Opposition Candidate Vote</b></td><td>${p['Opposition Candidate Vote']}</td></tr>
+            <tr><td>GOP Candidate Percent</td><td>${fmtPct(p['GOP Candidate Percent'])}</td></tr>
+            <tr><td>Opposition Candidate Percent</td><td>${fmtPct(p['Opposition Candidate Percent'])}</td></tr>
+            <tr><td><b>Percent Difference</b></td><td><b>${fmtPct(p['Percent Difference'])}</b></td></tr>
+            <tr><td>Total Votes</td><td>${p['Total Votes']}</td></tr>
+          </table>
+        </div>
+      `;
     }
 
-    function applyData(geo, csvRows) {
-      if (geojsonLayer) map.removeLayer(geojsonLayer);
+    function applyData(geo, rows) {
+      if (geojsonLayer) geojsonLayer.remove();
       labels.clearLayers();
 
-      const byPrecinct = new Map();
-      csvRows.forEach(row => {
-        const key = row[COLS.key];
-        if (key) byPrecinct.set(String(key).trim(), row);
-      });
+      const byED = new Map();
+      for (const r of rows) byED.set(String(r['ED']).trim(), r);
 
-      geo.features.forEach(f => {
-        const props = f.properties || {};
-        const key = props[COLS.key];
-        if (key && byPrecinct.has(String(key).trim())) {
-          f.properties = { ...props, ...byPrecinct.get(String(key).trim()) };
-        }
-      });
+      geo.features = geo.features.map(f => {
+        const ed = String(f.properties?.ED_Number ?? f.properties?.ED).trim();
+        const row = byED.get(ed);
+        return row && isMonitored(row) ? { ...f, properties: { ...f.properties, ...row } } : null;
+      }).filter(Boolean);
 
       geojsonLayer = L.geoJSON(geo, {
-        style: function (feature) {
-          const raw = feature.properties[COLS.margin];
-          const pct = toPctNumber(raw);
-          const norm = isNaN(pct) ? 0 : pct / 100;
+        style: feature => {
+          const val = parseFloat(feature.properties['Percent Difference']);
           return {
-            fillColor: getColor(norm),
-            color: "#222",
-            weight: 1,
-            fillOpacity: isHighlighted(feature.properties) ? 1 : 0.25
+            fillColor: getColor((val||0)/100),
+            fillOpacity: 0.8,
+            color: '#222',
+            weight: 1
           };
         },
-        onEachFeature: function (feature, layer) {
-          const p = feature.properties;
-          layer.bindPopup(drawPopup(p));
-          try {
-            const center = turf.centroid(feature).geometry.coordinates;
-            const txt = p[COLS.ed] ?? '';
-            const label = L.marker([center[1], center[0]], {
-              icon: L.divIcon({
-                className: isHighlighted(p) ? 'ed-label ed-label--highlight' : 'ed-label',
-                html: `<div>${txt}</div>`,
-                iconSize: isHighlighted(p) ? [28,28] : [40,20],
-                iconAnchor: isHighlighted(p) ? [14,14] : [20,10]
-              }),
-              interactive: false
-            });
-            labels.addLayer(label);
-          } catch (_) {}
+        onEachFeature: (feature, layer) => {
+          const props = feature.properties;
+          layer.bindPopup(drawPopup(props));
+
+          const coord = turf.centroid(feature).geometry.coordinates;
+          const lbl = L.marker([coord[1], coord[0]], {
+            icon: L.divIcon({
+              className: 'ed-label ed-label--monitor',
+              html: `<div>${props['ED']}</div>`,
+              iconSize: [28, 28],
+              iconAnchor: [14, 14]
+            }),
+            interactive: false
+          });
+          labels.addLayer(lbl);
         }
       }).addTo(map);
+
+      statusEl.textContent = `${geo.features.length} districts shown.`;
     }
 
-    let baseGeoJSON = null;
-    fetch('Election_District.geojson')
-      .then(res => res.json())
-      .then(g => { baseGeoJSON = g; applyData(g, []); });
+    let baseGeo = null;
+    fetch('Election_District.geojson').then(r=>r.json()).then(j=>{ baseGeo = j; });
 
     document.getElementById('csvFile').addEventListener('change', e => {
       const file = e.target.files[0];
-      if (!file) return;
+      if (!file || !baseGeo) return;
       Papa.parse(file, {
         header: true,
-        dynamicTyping: false,
+        dynamicTyping: true,
         skipEmptyLines: 'greedy',
-        complete: res => {
-          applyData(JSON.parse(JSON.stringify(baseGeoJSON)), res.data);
-          statusEl.textContent = `Loaded ${res.data.length} rows`;
-        }
+        complete: res => applyData(JSON.parse(JSON.stringify(baseGeo)), res.data)
       });
     });
   </script>
