@@ -19,36 +19,33 @@
     }
 
     .ed-label {
-      font-size: 12px; font-weight: 700; color: #000;
-      text-align: center; white-space: nowrap;
-      text-shadow: 0 0 3px #fff;
+      font-size: 12px;
+      font-weight: bold;
+      color: black;
+      text-shadow: 0 0 3px white;
     }
 
     .ed-label--highlight {
-      background: #ffffff;
-      border: 3px solid #e02424;
+      background: #fff;
+      border: 3px solid red;
       border-radius: 50%;
       width: 28px; height: 28px;
       display: flex; align-items: center; justify-content: center;
       padding: 0;
       box-shadow: 0 0 6px rgba(0,0,0,0.45);
-      font-weight: 800;
+      font-weight: bold;
       font-size: 12px;
       line-height: 1;
     }
 
-    .tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
-    .tbl td { padding: 2px 4px; border-bottom: 1px solid #eee; }
-
-    .legend {
-      background: white;
-      padding: 8px;
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
+    .tbl {
+      border-collapse: collapse;
+      width: 100%;
       font-size: 12px;
-      border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    .tbl td {
+      padding: 2px 4px;
+      border-bottom: 1px solid #eee;
     }
   </style>
 </head>
@@ -56,13 +53,10 @@
   <div id="uploadBox">
     <label for="csvFile"><b>Upload CSV</b></label><br>
     <input type="file" id="csvFile" accept=".csv" />
-    <p style="font-size:12px;">
-      Must include column <code>Committee Members</code>.<br>
-      Optional: <code>Highlight</code> (put X to show).
-    </p>
+    <p style="font-size:12px;">Must include column <code>Committee Members</code>.<br>
+    Optional: <code>Highlight</code> (put X to show).</p>
   </div>
   <div id="map"></div>
-  <div class="legend"><b>Fill:</b> Margin (Republican % – Opposition %)</div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -80,7 +74,7 @@
 
     function getColor(value) {
       if (isNaN(value)) return '#ccc';
-      const scaled = (value - 50) / 50;
+      const scaled = (value - 50) / 50;  // maps 0–100% GOP vote to -1 to +1
       return chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1, 0, 1])(scaled).hex();
     }
 
@@ -107,10 +101,13 @@
       }
 
       const orderedKeys = [
-        "Zone", "Candidate A (Total)", "Candidate B (Total)", "Candidate C (Total)",
-        "Candidate D (Total)", "Total Votes", "Opposition Vote Count (A+B)",
-        "Opposition Percentage (A+B)", "Republican Vote Count (C+D)",
-        "Republican  Percentage (C+D)", "Percentage Difference (Margin Republican -Opposition)"
+        'AD', 'SD', 'TD', 'CD', 'LD',
+        'GOP Candidate Votes',
+        'Opposition Candidate Vote',
+        'GOP Candidate Percent',
+        'Opposition Candidate Percent',
+        'Percent Difference',
+        'Total Votes'
       ];
 
       html += `<hr><table class="tbl">`;
@@ -129,15 +126,6 @@
       return String(raw ?? '').trim().toUpperCase() === 'X';
     }
 
-    function getMarginValue(props) {
-      let raw = props["Percentage Difference (Margin Republican -Opposition)"];
-      if (!raw) return 0;
-      if (typeof raw === "string" && raw.trim().endsWith("%")) {
-        return parseFloat(raw.trim().replace("%", ""));
-      }
-      return parseFloat(raw) || 0;
-    }
-
     function loadGeoJSON(data, csvData = null) {
       if (geojsonLayer) map.removeLayer(geojsonLayer);
       labelLayer.clearLayers();
@@ -146,7 +134,7 @@
       if (csvData) {
         csvData.forEach(row => {
           if (!row) return;
-          const k = row["PRECINCT_ID"] ?? row["PRECINCTID"] ?? row["ED"];
+          const k = row["PRECINCT_ID"] ?? row["PRECINCTID"];
           if (k != null) csvMap.set(String(k).trim(), row);
         });
       }
@@ -155,17 +143,22 @@
         const props = f.properties || {};
         const precinctKey =
           (props.PRECINCT_ID != null ? String(props.PRECINCT_ID).trim() : null) ||
-          (props.PRECINCTID != null ? String(props.PRECINCTID).trim() : null) ||
-          (props.ED != null ? String(props.ED).trim() : null);
+          (props.PRECINCTID != null ? String(props.PRECINCTID).trim() : null);
         const row = precinctKey ? csvMap.get(precinctKey) : null;
         if (row) f.properties = { ...props, ...row };
       });
 
       geojsonLayer = L.geoJSON(data, {
         style: function (feature) {
-          const margin = getMarginValue(feature.properties);
+          const raw = feature.properties['GOP Candidate Percent'];
+          let parsed = 0;
+          if (typeof raw === 'string' && raw.trim().endsWith('%')) {
+            parsed = parseFloat(raw.trim().replace('%', ''));
+          } else {
+            parsed = Number(raw);
+          }
           return {
-            fillColor: getColor(margin),
+            fillColor: getColor(parsed),
             color: "#333",
             weight: 1,
             fillOpacity: 0.85
