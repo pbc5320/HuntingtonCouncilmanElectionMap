@@ -2,32 +2,20 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Huntington Councilman Map</title>
+  <title>Huntington Election District Map – Councilman</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    #map { width:100%; height:100vh; }
-    #ui {
-      position:absolute; top:10px; left:10px; z-index:1000;
-      background:#fff; padding:10px; border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.15); max-width:420px;
+    body { margin: 0; }
+    #map { width: 100%; height: 100vh; }
+    #uploadBox {
+      position: absolute;
+      top: 10px; left: 10px; z-index: 1000;
+      background: white; padding: 10px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.15);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      max-width: 360px;
     }
-    .muted { color:#555; font-size:12px; }
-    .legend {
-      position:absolute; bottom:12px; left:10px; z-index:1000;
-      background:#fff; padding:8px 10px; border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:12px;
-    }
-    .legend .scale {
-      height:10px; width:220px;
-      background:linear-gradient(90deg,#00039b,white,#ff2400);
-      border-radius:4px; margin:6px 0;
-    }
-    .legend .ticks { display:flex; justify-content:space-between; }
-    .tbl { border-collapse:collapse; width:100%; font-size:12px; }
-    .tbl td { padding:2px 4px; border-bottom:1px solid #eee; }
-
     .ed-label {
       font-size: 12px; font-weight: 700; color: #000;
       text-align: center; white-space: nowrap;
@@ -45,21 +33,15 @@
       font-size: 12px;
       line-height: 1;
     }
+    .tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .tbl td { padding: 2px 4px; border-bottom: 1px solid #eee; }
   </style>
 </head>
 <body>
-  <div id="ui">
-    <b>Upload CSV</b><br>
-    <input type="file" id="csvFile" accept=".csv"/>
-    <div class="muted" style="margin-top:6px" id="status">Loading base map…</div>
+  <div id="uploadBox">
+    <label for="csvFile"><b>Upload CSV</b></label><br>
+    <input type="file" id="csvFile" accept=".csv" />
   </div>
-
-  <div class="legend">
-    <div><b>Heatmap:</b> Percent Difference (GOP % – Opposition %)</div>
-    <div class="scale"></div>
-    <div class="ticks"><span>-100%</span><span>0%</span><span>+100%</span></div>
-  </div>
-
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -68,321 +50,189 @@
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
 
   <script>
-    // ==== Map boot ====
+    // Basic map setup (same as supervisor style)
     const map = L.map('map').setView([40.85, -73.4], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
     let geojsonLayer;
-    const labels = L.layerGroup().addTo(map);
-    const statusEl = document.getElementById('status');
-    const fileInput = document.getElementById('csvFile');
-    fileInput.disabled = true;
+    const labelLayer = L.layerGroup().addTo(map);
 
-    // ==== Column contracts (JOIN KEY UPDATED: Precinct_Code) ====
-    const COLS = {
-      key: 'Precinct_Code',            // <-- GeoJSON join key
-      ed: 'ED',
-      zone: 'Zone',
-      members: 'Committee Members',
-      gop: 'GOP Candidate Votes',
-      opp: 'Opposition Candidate Vote',
-      total: 'Total Votes',
-      gopPct: 'GOP Candidate Percent',
-      oppPct: 'Opposition Candidate Percent',
-      margin: 'Percent Difference'
-    };
+    function getColor(value) {
+      if (isNaN(value)) return '#ccc';
+      // Supervisor style: map 0–100 GOP% to -1..+1, white midpoint
+      const scaled = (value - 50) / 50;
+      return chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1, 0, 1])(scaled).hex();
+    }
 
-    // ==== Helpers ====
-    const toNum = v => { const n = Number(String(v ?? '').replace(/[, ]/g,'')); return Number.isFinite(n) ? n : 0; };
-    const fmtInt = v => (isNaN(v) || v == null) ? '—' : `${Math.round(v)}`;
-    const nl2br = s => String(s??'').replace(/\r?\n/g,'<br>');
-    const getColor = x => chroma.scale(['#00039b', '#ffffff', '#ff2400']).domain([-1,0,1]).mode('lab')(x).hex();
+    const nl2br = s => String(s ?? '').replace(/\r?\n/g, '<br>');
 
-    function toPctNumber(v) {
-      if (v == null || v === '') return null;
-      const s = String(v).replace('%','').trim();
-      const n = Number(s.replace(/[, ]/g,''));
+    function parsePercentMaybe(v) {
+      if (v == null) return null;
+      const s = String(v).trim();
+      if (s === '') return null;
+      if (s.endsWith('%')) {
+        const n = parseFloat(s.replace('%',''));
+        return Number.isFinite(n) ? n : null;
+      }
+      const n = Number(s.replace(/[, ]/g, ''));
       if (!Number.isFinite(n)) return null;
-      return (n <= 1 && n >= 0) ? (n * 100) : n; // accept 0–1 or 0–100
+      // Accept 0–1 or 0–100
+      return (n <= 1 && n >= 0) ? n * 100 : n;
     }
-    function safeNormPercent(pct) {
-      const n = toPctNumber(pct);
-      return (n == null) ? 0 : Math.max(-100, Math.min(100, n)) / 100;
+
+    function fmtPctSmart(v) {
+      const n = parsePercentMaybe(v);
+      return (n == null) ? '—' : `${n.toFixed(2)}%`;
     }
-    const fmtPctSmart = v => {
-      const n = toPctNumber(v);
-      return (n == null) ? '—' : `${n.toFixed(1)}%`;
-    };
 
-    // Accept X/Yes/True/1 or any nonzero number (e.g., "27") as highlighted
-    const isHighlighted = props => {
-      const val = props['HIGHLIGHT'] ?? props['Highlight'] ?? props['highlight'];
-      if (val == null) return false;
-      const s = String(val).trim().toUpperCase();
-      if (s === 'X' || s === 'YES' || s === 'TRUE' || s === '1') return true;
-      const n = Number(s);
-      return Number.isFinite(n) && n !== 0;
-    };
-
-    function drawPopup(p) {
-      // ED may come from CSV as ED or from GeoJSON as ED_Number
-      const ed = p[COLS.ed] ?? p['ED_Number'] ?? '';
-      const z = p[COLS.zone] ?? '';
-      const cm = nl2br(p[COLS.members] ?? '');
-      const gop = toNum(p[COLS.gop]), opp = toNum(p[COLS.opp]);
-      const tot = toNum(p[COLS.total]);
-      const gopPct = p[COLS.gopPct], oppPct = p[COLS.oppPct], margin = p[COLS.margin];
-
+    function drawPopup(props) {
+      // Councilman GeoJSON has ED_Number; CSV may bring in ED
+      const name = props.ED ?? props.ED_Number ?? props['ED Number'] ?? props.NAME ?? '';
       let html = `<div style="min-width:260px">`;
-      html += `<div><b>ED:</b> ${ed}</div>`;
-      if (z) html += `<div><b>Zone:</b> ${z}</div>`;
-      if (cm) html += `<hr><div><b>Committee Members</b><br>${cm}</div>`;
+      html += `<div><strong>Election District:</strong> ${name}</div>`;
+
+      const members = props['Committee Members'];
+      if (members && String(members).trim() !== '') {
+        html += `<hr><div><strong>Committee Members</strong><br>${nl2br(members)}</div>`;
+      }
+
+      const orderedKeys = [
+        'GOP Candidate Votes',
+        'Opposition Candidate Vote',
+        'Republican  Percentage (C+D)', // double-space variant from sample
+        'Republican Percentage (C+D)',  // single-space fallback
+        'GOP Candidate Percent',
+        'Opposition Percentage (A+B)',
+        'Opposition Candidate Percent',
+        'Percent Difference',
+        'Percentage Difference (Margin Republican -Opposition)',
+        'Total Votes'
+      ];
+
       html += `<hr><table class="tbl">`;
-      html += `<tr><td><b>GOP Votes</b></td><td style="text-align:right">${fmtInt(gop)}</td></tr>`;
-      html += `<tr><td><b>Opposition Votes</b></td><td style="text-align:right">${fmtInt(opp)}</td></tr>`;
-      html += `<tr><td><b>Total Votes</b></td><td style="text-align:right">${fmtInt(tot)}</td></tr>`;
-      html += `<tr><td>GOP %</td><td style="text-align:right">${fmtPctSmart(gopPct)}</td></tr>`;
-      html += `<tr><td>Opposition %</td><td style="text-align:right">${fmtPctSmart(oppPct)}</td></tr>`;
-      html += `<tr><td><b>Margin</b></td><td style="text-align:right">${fmtPctSmart(margin)}</td></tr>`;
+      for (const key of orderedKeys) {
+        if (!(key in props)) continue;
+        let val = props[key] ?? 'N/A';
+        if (key.toLowerCase().includes('percent')) val = fmtPctSmart(val);
+        html += `<tr><td><b>${key}</b></td><td style="text-align:right">${val}</td></tr>`;
+      }
       html += `</table></div>`;
       return html;
     }
 
-    // ==== Flexible header matching ====
-    const norm = s => String(s||'')
-      .trim()
-      .toLowerCase()
-      .replace(/[%]/g, ' percent')
-      .replace(/[()]/g, ' ')
-      .replace(/[_\-]/g, ' ')
-      .replace(/\s+/g, ' ');
-
-    // Tailored aliases (JOIN maps CSV PRECINCT_ID -> GeoJSON Precinct_Code)
-    const HEADER_ALIASES = {
-      // Join & basics
-      'Precinct_Code': ['precinct_code','precinct id','precinct_id','precinctid','precinct code','precinct'],
-      'ED': ['ed','ed number','election district','ed_number','ednumber'],
-      'Zone': ['zone','zd'],
-      'Committee Members': ['committee members','committee_members','members'],
-
-      // Counts (from Opposition/GOP or A/B/C/D sheet)
-      'GOP Candidate Votes': [
-        'republican vote count (c+d)','republican vote count c+d','republican votes c+d',
-        'rep vote count (c+d)','gop votes c+d','republican vote count','gop candidate votes','gop votes'
-      ],
-      'Opposition Candidate Vote': [
-        'opposition vote count (a+b)','opposition vote count a+b','opposition votes a+b','opp votes a+b',
-        'opposition candidate votes','opposition vote count','opposition votes'
-      ],
-      'Total Votes': ['total votes','votes total','total'],
-
-      // Percents
-      'GOP Candidate Percent': [
-        'republican percentage (c+d)','republican percent (c+d)','republican percentage c+d',
-        'gop percent','gop percentage','republican percentage','republican  percentage (c+d)'
-      ],
-      'Opposition Candidate Percent': [
-        'opposition percentage (a+b)','opposition percent (a+b)','opp percent','opposition percentage'
-      ],
-
-      // Margin
-      'Percent Difference': [
-        'percentage difference (margin republican -opposition)',
-        'percentage difference margin republican opposition',
-        'percent difference (smyth-lupinacci)', // from GeoJSON schema
-        'margin','gop minus opposition','gop%-opp%'
-      ]
-    };
-
-    function buildHeaderMap(csvHeaders) {
-      const map = {};
-      const lower = new Map(csvHeaders.map(h => [norm(h), h]));
-      function resolve(expectedKey) {
-        if (lower.has(norm(expectedKey))) return lower.get(norm(expectedKey));
-        const alts = HEADER_ALIASES[expectedKey] || [];
-        for (const a of alts) {
-          if (lower.has(norm(a))) return lower.get(norm(a));
-        }
-        return null;
-      }
-      for (const k of Object.values(COLS)) {
-        map[k] = resolve(k);
-      }
-      return map;
+    function isHighlighted(props) {
+      const raw = props.Highlight ?? props.HIGHLIGHT ?? props.highlight;
+      const s = String(raw ?? '').trim().toUpperCase();
+      if (s === 'X' || s === 'YES' || s === 'TRUE' || s === '1') return true;
+      const n = Number(s);
+      return Number.isFinite(n) && n !== 0; // numeric nonzero also counts
     }
 
-    // ==== Data application ====
-    function applyData(geo, csvRows) {
+    // Helper to choose the GOP% column (Councilman CSV vs Supervisor CSV)
+    function extractGopPercent(props) {
+      const candidates = [
+        'Republican  Percentage (C+D)', // note double space in some sheets
+        'Republican Percentage (C+D)',
+        'GOP Candidate Percent'
+      ];
+      for (const k of candidates) {
+        const v = parsePercentMaybe(props[k]);
+        if (v != null) return v;
+      }
+      // If missing, compute from counts
+      const total = Number(props['Total Votes'] ?? 0);
+      const repCount = Number(props['Republican Vote Count (C+D)'] ?? props['GOP Candidate Votes'] ?? 0);
+      if (total > 0 && repCount >= 0) return (repCount / total) * 100;
+      return null;
+    }
+
+    function loadGeoJSON(data, csvData = null) {
       if (geojsonLayer) map.removeLayer(geojsonLayer);
-      labels.clearLayers();
+      labelLayer.clearLayers();
 
-      const csvHeaders = csvRows.length ? Object.keys(csvRows[0]) : [];
-      const headerMap = buildHeaderMap(csvHeaders);
-
-      const missingRequired = [];
-      if (!headerMap[COLS.key] && csvRows.length) missingRequired.push(COLS.key);
-
-      if (missingRequired.length) {
-        statusEl.innerHTML = `Missing required column(s) in CSV: <b>${missingRequired.join(', ')}</b>.<br>` +
-          `Hint: If your CSV uses PRECINCT_ID, that's fine — it is aliased to Precinct_Code.<br>` +
-          `Found headers: ${csvHeaders.join(' | ')}`;
-        csvRows = []; // skip merge; show base only
+      // Build CSV index by PRECINCT_ID (CSV) -> row
+      const csvMap = new Map();
+      if (csvData) {
+        csvData.forEach(row => {
+          if (!row) return;
+          const k = row['PRECINCT_ID'] ?? row['PRECINCTID'] ?? row['Precinct_Code'];
+          if (k != null && String(k).trim() !== '') {
+            csvMap.set(String(k).trim(), row);
+          }
+        });
       }
 
-      const byPrecinct = new Map();
-      csvRows.forEach(row => {
-        const keyCol = headerMap[COLS.key] || COLS.key;
-        const rawKey = row[keyCol];
-        if (rawKey != null && String(rawKey).trim() !== '') {
-          byPrecinct.set(String(rawKey).trim(), row);
-        }
-      });
-
-      function deriveFromABCD(row) {
-        const a = toNum(row['Candidate A (Total)'] ?? row['Candidate A Total'] ?? row['Candidate A']);
-        const b = toNum(row['Candidate B (Total)'] ?? row['Candidate B Total'] ?? row['Candidate B']);
-        const c = toNum(row['Candidate C (Total)'] ?? row['Candidate C Total'] ?? row['Candidate C']);
-        const d = toNum(row['Candidate D (Total)'] ?? row['Candidate D Total'] ?? row['Candidate D']);
-        return { a, b, c, d, total: a + b + c + d, opp: a + b, gop: c + d };
-      }
-
-      let matched = 0;
-      geo.features.forEach(f => {
+      // Merge CSV into GeoJSON by GeoJSON Precinct_Code
+      data.features.forEach(f => {
         const props = f.properties || {};
-        const joinKey = props[COLS.key] != null ? String(props[COLS.key]).trim() : null;
-
-        if (joinKey && byPrecinct.has(joinKey)) {
-          const row = byPrecinct.get(joinKey);
-          const merged = { ...props };
-
-          function get(col) {
-            const actual = headerMap[col] || col;
-            return row[actual];
-          }
-
-          // Basics
-          merged[COLS.ed]      = get(COLS.ed)      ?? props[COLS.ed] ?? props['ED_Number'];
-          merged[COLS.zone]    = get(COLS.zone)    ?? props[COLS.zone];
-          merged[COLS.members] = get(COLS.members) ?? props[COLS.members];
-
-          // Counts
-          merged[COLS.gop]   = get(COLS.gop);
-          merged[COLS.opp]   = get(COLS.opp);
-          merged[COLS.total] = get(COLS.total);
-
-          if (merged[COLS.gop] == null || merged[COLS.opp] == null || merged[COLS.total] == null) {
-            const dCounts = deriveFromABCD(row);
-            if (merged[COLS.gop] == null && dCounts.gop > 0)     merged[COLS.gop] = dCounts.gop;
-            if (merged[COLS.opp] == null && dCounts.opp > 0)     merged[COLS.opp] = dCounts.opp;
-            if (merged[COLS.total] == null && dCounts.total > 0) merged[COLS.total] = dCounts.total;
-          }
-
-          // Percents
-          let gppct = toPctNumber(get(COLS.gopPct));
-          let opppct = toPctNumber(get(COLS.oppPct));
-          const tp = toNum(merged[COLS.total]);
-          const gv = toNum(merged[COLS.gop]);
-          const ov = toNum(merged[COLS.opp]);
-          if (gppct == null && tp > 0) gppct = (gv / tp) * 100;
-          if (opppct == null && tp > 0) opppct = (ov / tp) * 100;
-          merged[COLS.gopPct] = (gppct != null) ? `${gppct}` : get(COLS.gopPct);
-          merged[COLS.oppPct] = (opppct != null) ? `${opppct}` : get(COLS.oppPct);
-
-          // Margin
-          let margin = get(COLS.margin);
-          if ((margin == null || margin === '') && gppct != null && opppct != null) {
-            margin = (gppct - opppct).toFixed(1);
-          }
-          merged[COLS.margin] = margin;
-
-          f.properties = merged;
-          matched++;
-        }
+        const precinctKey = props.PRECINCTID != null ? String(props.PRECINCTID).trim() : (props.PRECINCT_ID != null ? String(props.PRECINCT_ID).trim() : null);
+        const row = precinctKey ? csvMap.get(precinctKey) : null;
+        if (row) f.properties = { ...props, ...row };
       });
 
-      // Draw
-      geojsonLayer = L.geoJSON(geo, {
+      geojsonLayer = L.geoJSON(data, {
         style: function (feature) {
-          const raw = feature.properties[COLS.margin];
-          const normVal = safeNormPercent(raw); // -1..+1
+          const gopPct = extractGopPercent(feature.properties);
+          const fill = getColor(gopPct);
           return {
-            fillColor: getColor(normVal),
-            color: "#222",
+            fillColor: fill,
+            color: '#333',
             weight: 1,
-            fillOpacity: isHighlighted(feature.properties) ? 1 : 0.25
+            fillOpacity: 0.85
           };
         },
         onEachFeature: function (feature, layer) {
           const p = feature.properties;
           layer.bindPopup(drawPopup(p));
+
           try {
             const center = turf.centroid(feature).geometry.coordinates;
-            const txt = (p[COLS.ed] ?? p['ED_Number'] ?? '');
+            const edText = p.ED ?? p.ED_Number ?? p['ED Number'] ?? '';
+            const labelClass = isHighlighted(p) ? 'ed-label ed-label--highlight' : 'ed-label';
+            const iconSize = isHighlighted(p) ? [28, 28] : [40, 20];
+            const iconAnchor = isHighlighted(p) ? [14, 14] : [20, 10];
+
             const label = L.marker([center[1], center[0]], {
               icon: L.divIcon({
-                className: isHighlighted(p) ? 'ed-label ed-label--highlight' : 'ed-label',
-                html: `<div>${txt}</div>`,
-                iconSize: isHighlighted(p) ? [28,28] : [40,20],
-                iconAnchor: isHighlighted(p) ? [14,14] : [20,10]
+                className: labelClass,
+                html: `<div>${edText}</div>`,
+                iconSize: iconSize,
+                iconAnchor: iconAnchor
               }),
               interactive: false
             });
-            labels.addLayer(label);
-          } catch (_) {}
+            labelLayer.addLayer(label);
+          } catch (e) {}
         }
       }).addTo(map);
-
-      // Status / debug
-      const totalCSV = csvRows.length;
-      const totalGeo = geo.features.length;
-      if (totalCSV) {
-        statusEl.innerHTML = `Loaded ${totalCSV} row${totalCSV===1?'':'s'} • Matched ${matched}/${totalGeo} features.` +
-          (matched === 0 ? '<br><b>Tip:</b> Check your join key and header names.' : '');
-      }
     }
 
-    // ==== Load base GeoJSON, then enable upload ====
-    let baseGeoJSON = null;
-    fetch('Huntington_ED_Map_Final.geojson') // <-- use your uploaded filename
-      .then(res => {
-        if (!res.ok) throw new Error('HTTP '+res.status);
-        return res.json();
-      })
-      .then(g => {
-        baseGeoJSON = g;
-        applyData(g, []); // draw base
-        fileInput.disabled = false;
-        statusEl.textContent = 'Map ready. Choose a CSV to overlay.';
-      })
-      .catch(err => {
-        statusEl.textContent = 'Failed to load GeoJSON. Ensure the file name matches and is hosted next to this HTML.';
-        console.error(err);
-      });
+    // IMPORTANT: Use the Councilman GeoJSON filename
+    fetch('Election_District.geojson')
+      .then(res => res.json())
+      .then(data => loadGeoJSON(data));
 
-    // ==== CSV upload handler ====
-    document.getElementById('csvFile').addEventListener('change', e => {
+    document.getElementById('csvFile').addEventListener('change', function (e) {
       const file = e.target.files[0];
       if (!file) return;
-      if (!baseGeoJSON) {
-        statusEl.textContent = 'Map not ready yet—GeoJSON still loading.';
-        return;
-      }
       Papa.parse(file, {
         header: true,
         dynamicTyping: false,
         skipEmptyLines: 'greedy',
-        transformHeader: h => h.replace(/^\uFEFF/, '').trim(), // strip BOM + trim
-        complete: res => {
-          try {
-            const geoCopy = JSON.parse(JSON.stringify(baseGeoJSON));
-            applyData(geoCopy, res.data);
-          } catch (err) {
-            statusEl.textContent = 'Error applying CSV to map. See console.';
-            console.error(err);
-          }
-        },
-        error: err => {
-          statusEl.textContent = 'Failed to parse CSV. See console.';
-          console.error(err);
+        complete: function(results) {
+          const cleaned = results.data.map(row => {
+            const fixed = {};
+            for (const [key, val] of Object.entries(row)) {
+              if (!key) continue;
+              fixed[key.trim()] = typeof val === 'string' ? val.trim() : val;
+            }
+            return fixed;
+          });
+          fetch('Election_District.geojson')
+            .then(res => res.json())
+            .then(data => loadGeoJSON(data, cleaned));
         }
       });
     });
