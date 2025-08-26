@@ -36,6 +36,15 @@
       color: black;
       font-weight: bold;
     }
+    .ed-label {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  font-size: 11px;
+  font-weight: bold;
+  color: black;
+  text-shadow: 0 0 4px white;
+}
   </style>
 </head>
 <body>
@@ -68,8 +77,12 @@
           style: () => ({ weight: 1, color: '#222', fillOpacity: 0.7 }),
           onEachFeature: (feature, layer) => {
             const ed = feature.properties.ED || feature.properties.ED_Number || feature.properties.PRECINCTID;
-            layer.bindTooltip(ed.toString(), { permanent: true, direction: 'center', className: 'circle-label' });
-          }
+            layer.bindTooltip(ed.toString(), {
+            permanent: true,
+            direction: 'center',
+            className: 'ed-label',
+            opacity: 1
+          });
         }).addTo(map);
       });
 
@@ -128,20 +141,16 @@
           layer.bindPopup(popup);
 
           // Optional highlight
-          if (row["Highlight"] && row["Highlight"].toUpperCase() === "X") {
-            const center = layer.getBounds().getCenter();
-            L.circleMarker(center, {
-              radius: 18,
-              color: 'red',
-              weight: 3,
-              fillColor: 'white',
-              fillOpacity: 1
-            }).addTo(map).bindTooltip(ed.toString(), {
-              permanent: true,
-              direction: 'center',
-              className: 'circle-label'
-            });
-          }
+              if (row["Highlight"] && row["Highlight"].toUpperCase() === "X") {
+      const center = layer.getBounds().getCenter();
+      L.circleMarker(center, {
+        radius: 18,
+        color: 'red',
+        weight: 3,
+        fillColor: 'transparent',
+        fillOpacity: 0
+      }).addTo(map);
+    }
         });
       };
       reader.readAsText(file);
