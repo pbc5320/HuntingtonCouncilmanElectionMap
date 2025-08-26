@@ -11,7 +11,7 @@
     #ui {
       position:absolute; top:10px; left:10px; z-index:1000;
       background:#fff; padding:10px; border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.15); max-width:400px;
+      box-shadow:0 2px 10px rgba(0,0,0,.15); max-width:420px;
     }
     .muted { color:#555; font-size:12px; }
     .legend {
@@ -25,6 +25,8 @@
       border-radius:4px; margin:6px 0;
     }
     .legend .ticks { display:flex; justify-content:space-between; }
+    .tbl { border-collapse:collapse; width:100%; font-size:12px; }
+    .tbl td { padding:2px 4px; border-bottom:1px solid #eee; }
 
     .ed-label {
       font-size: 12px; font-weight: 700; color: #000;
@@ -43,15 +45,13 @@
       font-size: 12px;
       line-height: 1;
     }
-    .tbl { border-collapse:collapse; width:100%; font-size:12px; }
-    .tbl td { padding:2px 4px; border-bottom:1px solid #eee; }
   </style>
 </head>
 <body>
   <div id="ui">
     <b>Upload CSV</b><br>
     <input type="file" id="csvFile" accept=".csv"/>
-    <div class="muted" style="margin-top:6px" id="status"></div>
+    <div class="muted" style="margin-top:6px" id="status">Loading base map…</div>
   </div>
 
   <div class="legend">
@@ -68,14 +68,18 @@
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
 
   <script>
+    // ==== Map boot ====
     const map = L.map('map').setView([40.85, -73.4], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
     let geojsonLayer;
     const labels = L.layerGroup().addTo(map);
     const statusEl = document.getElementById('status');
+    const fileInput = document.getElementById('csvFile');
+    fileInput.disabled = true;
 
+    // ==== Column contracts (JOIN KEY UPDATED: Precinct_Code) ====
     const COLS = {
-      key: 'PRECINCT_ID',
+      key: 'Precinct_Code',            // <-- GeoJSON join key
       ed: 'ED',
       zone: 'Zone',
       members: 'Committee Members',
@@ -87,28 +91,41 @@
       margin: 'Percent Difference'
     };
 
-    const toNum = v => { const n = Number(String(v??'').replace(/[, ]/g,'')); return Number.isFinite(n)?n:0; };
-    const fmtInt = v => isNaN(v)||v==null ? '—' : `${Math.round(v)}`;
+    // ==== Helpers ====
+    const toNum = v => { const n = Number(String(v ?? '').replace(/[, ]/g,'')); return Number.isFinite(n) ? n : 0; };
+    const fmtInt = v => (isNaN(v) || v == null) ? '—' : `${Math.round(v)}`;
     const nl2br = s => String(s??'').replace(/\r?\n/g,'<br>');
     const getColor = x => chroma.scale(['#00039b', '#ffffff', '#ff2400']).domain([-1,0,1]).mode('lab')(x).hex();
 
-    const toPctNumber = v => {
-      if (v == null) return null;
-      const s = String(v).trim().replace('%','');
+    function toPctNumber(v) {
+      if (v == null || v === '') return null;
+      const s = String(v).replace('%','').trim();
       const n = Number(s.replace(/[, ]/g,''));
-      return Number.isFinite(n) ? ((n > 1) ? n : n * 100) : null;
-    };
+      if (!Number.isFinite(n)) return null;
+      return (n <= 1 && n >= 0) ? (n * 100) : n; // accept 0–1 or 0–100
+    }
+    function safeNormPercent(pct) {
+      const n = toPctNumber(pct);
+      return (n == null) ? 0 : Math.max(-100, Math.min(100, n)) / 100;
+    }
     const fmtPctSmart = v => {
       const n = toPctNumber(v);
       return (n == null) ? '—' : `${n.toFixed(1)}%`;
     };
+
+    // Accept X/Yes/True/1 or any nonzero number (e.g., "27") as highlighted
     const isHighlighted = props => {
       const val = props['HIGHLIGHT'] ?? props['Highlight'] ?? props['highlight'];
-      return val && String(val).trim().toUpperCase() === 'X';
+      if (val == null) return false;
+      const s = String(val).trim().toUpperCase();
+      if (s === 'X' || s === 'YES' || s === 'TRUE' || s === '1') return true;
+      const n = Number(s);
+      return Number.isFinite(n) && n !== 0;
     };
 
     function drawPopup(p) {
-      const ed = p[COLS.ed] ?? '';
+      // ED may come from CSV as ED or from GeoJSON as ED_Number
+      const ed = p[COLS.ed] ?? p['ED_Number'] ?? '';
       const z = p[COLS.zone] ?? '';
       const cm = nl2br(p[COLS.members] ?? '');
       const gop = toNum(p[COLS.gop]), opp = toNum(p[COLS.opp]);
@@ -130,31 +147,165 @@
       return html;
     }
 
+    // ==== Flexible header matching ====
+    const norm = s => String(s||'')
+      .trim()
+      .toLowerCase()
+      .replace(/[%]/g, ' percent')
+      .replace(/[()]/g, ' ')
+      .replace(/[_\-]/g, ' ')
+      .replace(/\s+/g, ' ');
+
+    // Tailored aliases (JOIN maps CSV PRECINCT_ID -> GeoJSON Precinct_Code)
+    const HEADER_ALIASES = {
+      // Join & basics
+      'Precinct_Code': ['precinct_code','precinct id','precinct_id','precinctid','precinct code','precinct'],
+      'ED': ['ed','ed number','election district','ed_number','ednumber'],
+      'Zone': ['zone','zd'],
+      'Committee Members': ['committee members','committee_members','members'],
+
+      // Counts (from Opposition/GOP or A/B/C/D sheet)
+      'GOP Candidate Votes': [
+        'republican vote count (c+d)','republican vote count c+d','republican votes c+d',
+        'rep vote count (c+d)','gop votes c+d','republican vote count','gop candidate votes','gop votes'
+      ],
+      'Opposition Candidate Vote': [
+        'opposition vote count (a+b)','opposition vote count a+b','opposition votes a+b','opp votes a+b',
+        'opposition candidate votes','opposition vote count','opposition votes'
+      ],
+      'Total Votes': ['total votes','votes total','total'],
+
+      // Percents
+      'GOP Candidate Percent': [
+        'republican percentage (c+d)','republican percent (c+d)','republican percentage c+d',
+        'gop percent','gop percentage','republican percentage','republican  percentage (c+d)'
+      ],
+      'Opposition Candidate Percent': [
+        'opposition percentage (a+b)','opposition percent (a+b)','opp percent','opposition percentage'
+      ],
+
+      // Margin
+      'Percent Difference': [
+        'percentage difference (margin republican -opposition)',
+        'percentage difference margin republican opposition',
+        'percent difference (smyth-lupinacci)', // from GeoJSON schema
+        'margin','gop minus opposition','gop%-opp%'
+      ]
+    };
+
+    function buildHeaderMap(csvHeaders) {
+      const map = {};
+      const lower = new Map(csvHeaders.map(h => [norm(h), h]));
+      function resolve(expectedKey) {
+        if (lower.has(norm(expectedKey))) return lower.get(norm(expectedKey));
+        const alts = HEADER_ALIASES[expectedKey] || [];
+        for (const a of alts) {
+          if (lower.has(norm(a))) return lower.get(norm(a));
+        }
+        return null;
+      }
+      for (const k of Object.values(COLS)) {
+        map[k] = resolve(k);
+      }
+      return map;
+    }
+
+    // ==== Data application ====
     function applyData(geo, csvRows) {
       if (geojsonLayer) map.removeLayer(geojsonLayer);
       labels.clearLayers();
 
+      const csvHeaders = csvRows.length ? Object.keys(csvRows[0]) : [];
+      const headerMap = buildHeaderMap(csvHeaders);
+
+      const missingRequired = [];
+      if (!headerMap[COLS.key] && csvRows.length) missingRequired.push(COLS.key);
+
+      if (missingRequired.length) {
+        statusEl.innerHTML = `Missing required column(s) in CSV: <b>${missingRequired.join(', ')}</b>.<br>` +
+          `Hint: If your CSV uses PRECINCT_ID, that's fine — it is aliased to Precinct_Code.<br>` +
+          `Found headers: ${csvHeaders.join(' | ')}`;
+        csvRows = []; // skip merge; show base only
+      }
+
       const byPrecinct = new Map();
       csvRows.forEach(row => {
-        const key = row[COLS.key];
-        if (key) byPrecinct.set(String(key).trim(), row);
-      });
-
-      geo.features.forEach(f => {
-        const props = f.properties || {};
-        const key = props[COLS.key];
-        if (key && byPrecinct.has(String(key).trim())) {
-          f.properties = { ...props, ...byPrecinct.get(String(key).trim()) };
+        const keyCol = headerMap[COLS.key] || COLS.key;
+        const rawKey = row[keyCol];
+        if (rawKey != null && String(rawKey).trim() !== '') {
+          byPrecinct.set(String(rawKey).trim(), row);
         }
       });
 
+      function deriveFromABCD(row) {
+        const a = toNum(row['Candidate A (Total)'] ?? row['Candidate A Total'] ?? row['Candidate A']);
+        const b = toNum(row['Candidate B (Total)'] ?? row['Candidate B Total'] ?? row['Candidate B']);
+        const c = toNum(row['Candidate C (Total)'] ?? row['Candidate C Total'] ?? row['Candidate C']);
+        const d = toNum(row['Candidate D (Total)'] ?? row['Candidate D Total'] ?? row['Candidate D']);
+        return { a, b, c, d, total: a + b + c + d, opp: a + b, gop: c + d };
+      }
+
+      let matched = 0;
+      geo.features.forEach(f => {
+        const props = f.properties || {};
+        const joinKey = props[COLS.key] != null ? String(props[COLS.key]).trim() : null;
+
+        if (joinKey && byPrecinct.has(joinKey)) {
+          const row = byPrecinct.get(joinKey);
+          const merged = { ...props };
+
+          function get(col) {
+            const actual = headerMap[col] || col;
+            return row[actual];
+          }
+
+          // Basics
+          merged[COLS.ed]      = get(COLS.ed)      ?? props[COLS.ed] ?? props['ED_Number'];
+          merged[COLS.zone]    = get(COLS.zone)    ?? props[COLS.zone];
+          merged[COLS.members] = get(COLS.members) ?? props[COLS.members];
+
+          // Counts
+          merged[COLS.gop]   = get(COLS.gop);
+          merged[COLS.opp]   = get(COLS.opp);
+          merged[COLS.total] = get(COLS.total);
+
+          if (merged[COLS.gop] == null || merged[COLS.opp] == null || merged[COLS.total] == null) {
+            const dCounts = deriveFromABCD(row);
+            if (merged[COLS.gop] == null && dCounts.gop > 0)     merged[COLS.gop] = dCounts.gop;
+            if (merged[COLS.opp] == null && dCounts.opp > 0)     merged[COLS.opp] = dCounts.opp;
+            if (merged[COLS.total] == null && dCounts.total > 0) merged[COLS.total] = dCounts.total;
+          }
+
+          // Percents
+          let gppct = toPctNumber(get(COLS.gopPct));
+          let opppct = toPctNumber(get(COLS.oppPct));
+          const tp = toNum(merged[COLS.total]);
+          const gv = toNum(merged[COLS.gop]);
+          const ov = toNum(merged[COLS.opp]);
+          if (gppct == null && tp > 0) gppct = (gv / tp) * 100;
+          if (opppct == null && tp > 0) opppct = (ov / tp) * 100;
+          merged[COLS.gopPct] = (gppct != null) ? `${gppct}` : get(COLS.gopPct);
+          merged[COLS.oppPct] = (opppct != null) ? `${opppct}` : get(COLS.oppPct);
+
+          // Margin
+          let margin = get(COLS.margin);
+          if ((margin == null || margin === '') && gppct != null && opppct != null) {
+            margin = (gppct - opppct).toFixed(1);
+          }
+          merged[COLS.margin] = margin;
+
+          f.properties = merged;
+          matched++;
+        }
+      });
+
+      // Draw
       geojsonLayer = L.geoJSON(geo, {
         style: function (feature) {
           const raw = feature.properties[COLS.margin];
-          const pct = toPctNumber(raw);
-          const norm = isNaN(pct) ? 0 : pct / 100;
+          const normVal = safeNormPercent(raw); // -1..+1
           return {
-            fillColor: getColor(norm),
+            fillColor: getColor(normVal),
             color: "#222",
             weight: 1,
             fillOpacity: isHighlighted(feature.properties) ? 1 : 0.25
@@ -165,7 +316,7 @@
           layer.bindPopup(drawPopup(p));
           try {
             const center = turf.centroid(feature).geometry.coordinates;
-            const txt = p[COLS.ed] ?? '';
+            const txt = (p[COLS.ed] ?? p['ED_Number'] ?? '');
             const label = L.marker([center[1], center[0]], {
               icon: L.divIcon({
                 className: isHighlighted(p) ? 'ed-label ed-label--highlight' : 'ed-label',
@@ -179,23 +330,59 @@
           } catch (_) {}
         }
       }).addTo(map);
+
+      // Status / debug
+      const totalCSV = csvRows.length;
+      const totalGeo = geo.features.length;
+      if (totalCSV) {
+        statusEl.innerHTML = `Loaded ${totalCSV} row${totalCSV===1?'':'s'} • Matched ${matched}/${totalGeo} features.` +
+          (matched === 0 ? '<br><b>Tip:</b> Check your join key and header names.' : '');
+      }
     }
 
+    // ==== Load base GeoJSON, then enable upload ====
     let baseGeoJSON = null;
-    fetch('Election_District.geojson')
-      .then(res => res.json())
-      .then(g => { baseGeoJSON = g; applyData(g, []); });
+    fetch('Huntington_ED_Map_Final.geojson') // <-- use your uploaded filename
+      .then(res => {
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        return res.json();
+      })
+      .then(g => {
+        baseGeoJSON = g;
+        applyData(g, []); // draw base
+        fileInput.disabled = false;
+        statusEl.textContent = 'Map ready. Choose a CSV to overlay.';
+      })
+      .catch(err => {
+        statusEl.textContent = 'Failed to load GeoJSON. Ensure the file name matches and is hosted next to this HTML.';
+        console.error(err);
+      });
 
+    // ==== CSV upload handler ====
     document.getElementById('csvFile').addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file) return;
+      if (!baseGeoJSON) {
+        statusEl.textContent = 'Map not ready yet—GeoJSON still loading.';
+        return;
+      }
       Papa.parse(file, {
         header: true,
         dynamicTyping: false,
         skipEmptyLines: 'greedy',
+        transformHeader: h => h.replace(/^\uFEFF/, '').trim(), // strip BOM + trim
         complete: res => {
-          applyData(JSON.parse(JSON.stringify(baseGeoJSON)), res.data);
-          statusEl.textContent = `Loaded ${res.data.length} rows`;
+          try {
+            const geoCopy = JSON.parse(JSON.stringify(baseGeoJSON));
+            applyData(geoCopy, res.data);
+          } catch (err) {
+            statusEl.textContent = 'Error applying CSV to map. See console.';
+            console.error(err);
+          }
+        },
+        error: err => {
+          statusEl.textContent = 'Failed to parse CSV. See console.';
+          console.error(err);
         }
       });
     });
