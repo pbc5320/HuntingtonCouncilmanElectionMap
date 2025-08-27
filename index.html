@@ -2,13 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Huntington Election District Map</title>
+  <title>Precinct Election Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     body { margin: 0; }
     #map { width: 100%; height: 100vh; }
-
     #uploadBox {
       position: absolute;
       top: 10px; left: 10px; z-index: 1000;
@@ -17,27 +16,33 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       max-width: 360px;
     }
-
     .ed-label {
       font-size: 12px;
       font-weight: bold;
       color: black;
       text-shadow: 0 0 3px white;
-      white-space: nowrap;
     }
-
-    .tbl { border-collapse: collapse; width: 100%; font-size: 13px; }
+    .ed-label--highlight {
+      background: white;
+      border: 3px solid #e02424;
+      border-radius: 50%;
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800;
+      font-size: 12px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.45);
+    }
+    .tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
     .tbl td { padding: 2px 4px; border-bottom: 1px solid #eee; }
-    .tbl td:first-child { font-weight: 600; }
   </style>
 </head>
 <body>
   <div id="uploadBox">
     <label for="csvFile"><b>Upload CSV</b></label><br>
     <input type="file" id="csvFile" accept=".csv" />
-    <p style="font-size: 12px;">
+    <p style="font-size: 12px; margin-top: 8px;">
       Must include column <code>Committee Members</code>.<br>
-      Optional: <code>Highlight</code> (put <b>X</b> to show).
+      Optional: <code>Highlight</code> (put X to show).
     </p>
   </div>
   <div id="map"></div>
@@ -57,74 +62,86 @@
     let geojsonLayer;
     const labelLayer = L.layerGroup().addTo(map);
 
-    const getColor = value => {
+    const getColor = (value) => {
       if (isNaN(value)) return '#ccc';
-      return chroma.scale(['#001f3f', 'white', '#8B0000'])
-                   .domain([-1, 0, 1])((value - 50) / 50)
-                   .hex();
+      const n = Number(value);
+      const scale = chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-100, 0, 100]);
+      return scale(n).hex();
     };
 
-    const fmtPct = v => {
-      const num = parseFloat(String(v).replace('%', ''));
-      return isNaN(num) ? v : `${num.toFixed(2)}%`;
+    const isHighlighted = (props) => {
+      const raw = props.Highlight ?? props.HIGHLIGHT;
+      return String(raw ?? '').trim().toUpperCase() === 'X';
     };
 
-    const nl2br = s => String(s ?? '').replace(/\r?\n/g, '<br>');
+    const fmt = (val) => {
+      if (val == null) return '—';
+      const s = String(val).trim();
+      if (s === '') return '—';
+      if (s.endsWith('%')) return s;
+      const n = Number(s.replace(/[% ]/g, ''));
+      if (!Number.isFinite(n)) return s;
+      return `${n.toFixed(2)}%`;
+    };
 
-    const drawPopup = props => {
-      const name = props.ED ?? props['ED Number'] ?? props.PRECINCT_ID ?? '';
-      let html = `<div style="min-width:260px">`;
-      html += `<div><strong>Election District:</strong> ${name}</div>`;
+    const nl2br = (s) => String(s ?? '').replace(/\r?\n/g, '<br>');
 
-      const members = props['Committee Members'];
-      if (members) html += `<hr><div><strong>Committee Members</strong><br>${nl2br(members)}</div>`;
+    const drawPopup = (p) => {
+      const ed = p.ED ?? '';
+      let html = `<div style="min-width:260px"><div><strong>Election District:</strong> ${ed}</div>`;
 
-      const fields = [
-        'AD', 'SD', 'CD', 'LD',
-        'GOP Candidate Votes', 'Opposition Candidate Vote',
-        'GOP Candidate Percent', 'Opposition Candidate Percent',
-        'Percent Difference', 'Total Votes'
+      const cm = p['Committee Members'];
+      if (cm && String(cm).trim() !== '') {
+        html += `<hr><div><strong>Committee Members</strong><br>${nl2br(cm)}</div>`;
+      }
+
+      const rows = [
+        ['Candidate A (Total)', p['Candidate A (Total)']],
+        ['Candidate B (Total)', p['Candidate B (Total)']],
+        ['Candidate C (Total)', p['Candidate C (Total)']],
+        ['Candidate D (Total)', p['Candidate D (Total)']],
+        ['Opposition Vote Count (A+B)', p['Opposition Vote Count(A+B)']],
+        ['Republican Vote Count (C+D)', p['Republican Vote Count (C+D)']],
+        ['Opposition Percentage', fmt(p['Opposition Percentage (A+B)'])],
+        ['Republican Percentage', fmt(p['Republican  Percentage (C+D)'])],
+        ['Percentage Difference', fmt(p['Percentage Difference (Margin Republican -Opposition)'])],
+        ['Total Votes', p['Total Votes']]
       ];
 
       html += `<hr><table class="tbl">`;
-      for (const key of fields) {
-        const val = props[key];
-        if (!val) continue;
-        const formatted = key.toLowerCase().includes('percent') ? fmtPct(val) : val;
-        html += `<tr><td>${key}</td><td style="text-align:right">${formatted}</td></tr>`;
+      for (const [label, val] of rows) {
+        if (val != null && val !== '') {
+          html += `<tr><td><b>${label}</b></td><td style="text-align:right">${val}</td></tr>`;
+        }
       }
       html += `</table></div>`;
       return html;
     };
 
-    const isMonitored = props => {
-      const raw = props.Highlight ?? props.HIGHLIGHT ?? props.highlight;
-      return String(raw ?? '').trim().toUpperCase() === 'X';
-    };
-
-    function loadGeoJSON(data, csvData = null) {
+    const loadGeoJSON = (data, csvData = null) => {
       if (geojsonLayer) map.removeLayer(geojsonLayer);
       labelLayer.clearLayers();
 
       const csvMap = new Map();
       if (csvData) {
         csvData.forEach(row => {
-          const k = row["PRECINCT_ID"] ?? row["PRECINCTID"];
+          const k = row["PRECINCT_ID"];
           if (k != null) csvMap.set(String(k).trim(), row);
         });
       }
 
       data.features.forEach(f => {
         const props = f.properties || {};
-        const key = props.PRECINCT_ID ?? props.PRECINCTID ?? props.ED ?? props["ED Number"];
-        if (key && csvMap.has(String(key).trim())) {
-          f.properties = { ...props, ...csvMap.get(String(key).trim()) };
+        const key = String(props.PRECINCT_ID ?? '').trim();
+        const csvRow = csvMap.get(key);
+        if (csvRow) {
+          f.properties = { ...props, ...csvRow };
         }
       });
 
       geojsonLayer = L.geoJSON(data, {
-        style: function (feature) {
-          const margin = parseFloat(feature.properties['Percent Difference']);
+        style: (feature) => {
+          const margin = parseFloat(feature.properties['Percentage Difference (Margin Republican -Opposition)']) || 0;
           return {
             fillColor: getColor(margin),
             color: "#333",
@@ -132,27 +149,29 @@
             fillOpacity: 0.85
           };
         },
-        onEachFeature: function (feature, layer) {
+        onEachFeature: (feature, layer) => {
           const p = feature.properties;
           layer.bindPopup(drawPopup(p));
 
           try {
             const center = turf.centroid(feature).geometry.coordinates;
-            const edText = p.ED ?? p['ED Number'] ?? p.PRECINCT_ID ?? '';
-            const label = L.marker([center[1], center[0]], {
-              icon: L.divIcon({
-                className: 'ed-label',
-                html: `${edText}`,
-                iconSize: [40, 20],
-                iconAnchor: [20, 10]
-              }),
+            const edText = p.ED ?? '';
+            const highlight = isHighlighted(p);
+            const icon = L.divIcon({
+              className: highlight ? 'ed-label ed-label--highlight' : 'ed-label',
+              html: `<div>${edText}</div>`,
+              iconSize: highlight ? [28, 28] : [40, 20],
+              iconAnchor: highlight ? [14, 14] : [20, 10]
+            });
+            const marker = L.marker([center[1], center[0]], {
+              icon: icon,
               interactive: false
             });
-            labelLayer.addLayer(label);
+            labelLayer.addLayer(marker);
           } catch (e) {}
         }
       }).addTo(map);
-    }
+    };
 
     fetch("Election_District.geojson")
       .then(res => res.json())
