@@ -98,11 +98,15 @@ function drawPopup(props) {
   const members = props['Committee Members'];
   if (members) html += `<hr><div><strong>Committee Members</strong><br>${members.replace(/\n/g, '<br>')}</div>`;
 
-  const order = [
-    'AD','SD','CD','LD',
-    'GOP Candidate Votes','Opposition Candidate Vote',
-    'GOP Candidate Percent','Opposition Candidate Percent','Percent Difference','Total Votes'
-  ];
+  const orderedKeys = [
+  'AD', 'SD', 'CD', 'LD',
+  'GOP Candidate Votes',
+  'Opposition Candidate Vote',
+  'GOP Candidate Percent',
+  'Opposition Candidate Percent',
+  'Percent Difference',
+  'Total Votes'
+];
   html += `<hr><table class="tbl">`;
   for (const key of order) {
     if (!props[key]) continue;
