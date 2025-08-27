@@ -72,18 +72,9 @@ function normalizeHeaders(row) {
 
 function getColor(value) {
   if (isNaN(value)) return '#ccc';
-  const scaled = value / 100;
+  const scaled = value / 50;
   return chroma.scale(['#001f3f', 'white', '#8B0000']).domain([-1, 0, 1])(scaled).hex();
 }
-
-const map = L.map('map').setView([40.85, -73.4], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
-
-let geojsonLayer;
-const labelLayer = L.layerGroup().addTo(map);
 
 function fmtPctSmart(v) {
   const s = String(v ?? '').trim();
@@ -92,23 +83,27 @@ function fmtPctSmart(v) {
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : '—';
 }
 
+function nl2br(str) {
+  return String(str ?? '').replace(/\n/g, '<br>');
+}
+
 function drawPopup(props) {
   const ed = props.ED ?? props['ED Number'] ?? '';
   let html = `<div style="min-width:260px"><div><strong>Election District:</strong> ${ed}</div>`;
   const members = props['Committee Members'];
-  if (members) html += `<hr><div><strong>Committee Members</strong><br>${members.replace(/\n/g, '<br>')}</div>`;
+  if (members) html += `<hr><div><strong>Committee Members</strong><br>${nl2br(members)}</div>`;
 
   const orderedKeys = [
-  'AD', 'SD', 'CD', 'LD',
-  'GOP Candidate Votes',
-  'Opposition Candidate Vote',
-  'GOP Candidate Percent',
-  'Opposition Candidate Percent',
-  'Percent Difference',
-  'Total Votes'
-];
+    'AD', 'SD', 'CD', 'LD',
+    'GOP Candidate Votes',
+    'Opposition Candidate Vote',
+    'GOP Candidate Percent',
+    'Opposition Candidate Percent',
+    'Percent Difference',
+    'Total Votes'
+  ];
   html += `<hr><table class="tbl">`;
-  for (const key of order) {
+  for (const key of orderedKeys) {
     if (!props[key]) continue;
     const val = key.toLowerCase().includes('percent') ? fmtPctSmart(props[key]) : props[key];
     html += `<tr><td><b>${key}</b></td><td style="text-align:right">${val}</td></tr>`;
@@ -121,6 +116,15 @@ function isMonitored(props) {
   const raw = props.Highlight ?? props.HIGHLIGHT ?? props.highlight;
   return String(raw ?? '').trim().toUpperCase() === 'X';
 }
+
+const map = L.map('map').setView([40.85, -73.4], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+let geojsonLayer;
+const labelLayer = L.layerGroup().addTo(map);
 
 function loadGeoJSON(data, csvData = null) {
   if (geojsonLayer) map.removeLayer(geojsonLayer);
