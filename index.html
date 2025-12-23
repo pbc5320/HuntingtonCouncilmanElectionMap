@@ -184,15 +184,15 @@ function drawPopup(props) {
   }
 
   // Use the exact labels you want displayed
-  const orderedKeys = [
-    'AD', 'SD', 'CD', 'LD',
-    POPUP_LABELS.OPP_VOTES,
-    POPUP_LABELS.OPP_PCT,
-    POPUP_LABELS.GOP_VOTES,
-    POPUP_LABELS.GOP_PCT,
-    'Percent Difference',
-    'Total Votes'
-  ];
+const orderedKeys = [
+  'AD', 'SD', 'CD', 'LD',
+  POPUP_LABELS.GOP_VOTES,
+  POPUP_LABELS.OPP_VOTES,
+  POPUP_LABELS.GOP_PCT,
+  POPUP_LABELS.OPP_PCT,
+  'Percent Difference',
+  'Total Votes'
+];
 
   html += `<hr><table class="tbl">`;
   for (const key of orderedKeys) {
